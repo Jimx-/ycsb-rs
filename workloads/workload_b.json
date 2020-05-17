@@ -1,0 +1,30 @@
+{
+  "table": "usertable",
+  "field_count": 10,
+  "field_len_dist": {
+    "Constant": 100
+  },
+  "read_all_fields": true,
+  "write_all_fields": false,
+  "ordered_insert": false,
+  "read_proportion": 0.95,
+  "update_proportion": 0.05,
+  "insert_proportion": 0.0,
+  "scan_proportion": 0.0,
+  "rmw_proportion": 0.0,
+  "request_dist": {
+    "Zipfian": [
+      0,
+      1.01
+    ]
+  },
+  "scan_len_dist": {
+    "Uniform": [
+      1,
+      1000
+    ]
+  },
+  "insert_start": 0,
+  "record_count": 100000,
+  "operation_count": 100000
+}

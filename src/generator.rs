@@ -1,9 +1,11 @@
-use std::sync::Mutex;
+use crate::{Error, Result};
+
+use std::sync::{atomic::AtomicU64, Mutex};
 
 use rand::{
     distributions::{Distribution, Uniform},
     rngs::StdRng,
-    SeedableRng,
+    Rng, SeedableRng,
 };
 
 use zipf::ZipfDistribution;
@@ -75,13 +77,85 @@ pub fn zipfian_gen(
     num_elements: usize,
     exponent: f64,
     seed: u64,
-) -> Result<DistributionGenerator<usize, ZipfDistribution>, ()> {
-    let dist = ZipfDistribution::new(num_elements, exponent)?;
+) -> Result<DistributionGenerator<usize, ZipfDistribution>> {
+    let dist = ZipfDistribution::new(num_elements, exponent)
+        .map_err(|_| Error::InvalidArgument("zipf distribution".to_owned()))?;
 
     Ok(DistributionGenerator {
         state: Mutex::new((None, StdRng::seed_from_u64(seed))),
         dist,
     })
+}
+
+pub struct DiscreteDistribution<T> {
+    values: Vec<(T, f64)>,
+    sum: f64,
+}
+
+impl<T> DiscreteDistribution<T> {
+    fn new(values: Vec<(T, f64)>) -> Self {
+        let sum = values.iter().map(|x| x.1).sum();
+
+        Self { values, sum }
+    }
+}
+
+impl<T> Distribution<T> for DiscreteDistribution<T>
+where
+    T: Clone + Default,
+{
+    fn sample<R: Rng + ?Sized>(&self, rng: &mut R) -> T {
+        let val: f64 = rng.gen();
+
+        let mut acc = 0.0;
+        for (t, weight) in &self.values {
+            acc += weight / self.sum;
+
+            if val < acc {
+                return t.clone();
+            }
+        }
+
+        Default::default()
+    }
+}
+
+pub fn discrete_gen<T: Clone + Default>(
+    values: Vec<(T, f64)>,
+    seed: u64,
+) -> DistributionGenerator<T, DiscreteDistribution<T>> {
+    DistributionGenerator {
+        state: Mutex::new((None, StdRng::seed_from_u64(seed))),
+        dist: DiscreteDistribution::new(values),
+    }
+}
+
+pub struct CounterGenerator {
+    counter: AtomicU64,
+}
+
+impl CounterGenerator {
+    pub fn new(val: u64) -> Self {
+        Self {
+            counter: AtomicU64::new(val),
+        }
+    }
+}
+impl Generator<u64> for CounterGenerator {
+    fn next(&self) -> u64 {
+        self.counter
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst)
+    }
+
+    fn last(&self) -> Option<u64> {
+        let val = self.counter.load(std::sync::atomic::Ordering::SeqCst);
+
+        if val == 0 {
+            None
+        } else {
+            Some(val - 1)
+        }
+    }
 }
 
 #[cfg(test)]
@@ -94,5 +168,16 @@ mod tests {
 
         assert_eq!(gen.next(), 100);
         assert_eq!(gen.last(), Some(100));
+    }
+
+    #[test]
+    fn test_counter_generator() {
+        let gen = CounterGenerator::new(0);
+        assert_eq!(gen.last(), None);
+
+        for i in 0..10 {
+            assert_eq!(gen.next(), i);
+        }
+        assert_eq!(gen.last(), Some(9));
     }
 }
