@@ -13,10 +13,8 @@ mod workload;
 pub use crate::{
     db::{Db, MockDb},
     result::{Error, Result},
-    workload::WorkloadSpec,
+    workload::{CoreWorkload, Operation, WorkloadSpec},
 };
-
-use crate::workload::{CoreWorkload, Operation};
 
 use std::{fs::File, io::prelude::*, path::Path, sync::Arc, thread, time::Instant};
 
