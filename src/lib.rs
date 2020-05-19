@@ -20,13 +20,17 @@ use std::{fs::File, io::prelude::*, path::Path, sync::Arc, thread, time::Instant
 
 use indicatif::{ProgressBar, ProgressStyle};
 
-struct Client<'a, T> {
+pub struct Client<'a, T> {
     db: &'a dyn Db<Transaction = T>,
     workload: &'a CoreWorkload,
 }
 
-impl<T> Client<'_, T> {
-    fn read_txn(&self, txn: &mut T) -> Result<()> {
+impl<'a, T> Client<'a, T> {
+    pub fn new(db: &'a dyn Db<Transaction = T>, workload: &'a CoreWorkload) -> Self {
+        Self { db, workload }
+    }
+
+    pub fn read_txn(&self, txn: &mut T) -> Result<()> {
         let table = self.workload.next_table();
         let key = self.workload.next_transaction_key();
 
@@ -39,7 +43,7 @@ impl<T> Client<'_, T> {
         self.db.read(txn, &table, &key, fields).map(|_| ())
     }
 
-    fn update_txn(&self, txn: &mut T) -> Result<()> {
+    pub fn update_txn(&self, txn: &mut T) -> Result<()> {
         let table = self.workload.next_table();
         let key = self.workload.next_transaction_key();
 
@@ -52,7 +56,7 @@ impl<T> Client<'_, T> {
         self.db.update(txn, &table, key, values).map(|_| ())
     }
 
-    fn insert_txn(&self, txn: &mut T) -> Result<()> {
+    pub fn insert_txn(&self, txn: &mut T) -> Result<()> {
         let table = self.workload.next_table();
         let key = self.workload.next_sequence_key();
         let values = self.workload.build_values();
@@ -60,7 +64,7 @@ impl<T> Client<'_, T> {
         self.db.insert(txn, &table, key, values).map(|_| ())
     }
 
-    fn scan_txn(&self, txn: &mut T) -> Result<()> {
+    pub fn scan_txn(&self, txn: &mut T) -> Result<()> {
         let table = self.workload.next_table();
         let key = self.workload.next_transaction_key();
         let length = self.workload.next_scan_length();
@@ -74,7 +78,7 @@ impl<T> Client<'_, T> {
         self.db.scan(txn, &table, &key, length, fields).map(|_| ())
     }
 
-    fn rmw_txn(&self, txn: &mut T) -> Result<()> {
+    pub fn rmw_txn(&self, txn: &mut T) -> Result<()> {
         let table = self.workload.next_table();
         let key = self.workload.next_transaction_key();
 
@@ -163,7 +167,7 @@ fn bench_txn<T>(
     num_ops: usize,
     pb: &ProgressBar,
 ) -> Result<usize> {
-    let client = Client { db, workload };
+    let client = Client::new(db, workload);
     let mut total_count = 0;
 
     for _ in 0..num_ops {
@@ -206,7 +210,6 @@ pub fn run_ycsb<P: AsRef<Path>, T: 'static>(
     db: Arc<dyn Db<Transaction = T>>,
     workload_path: P,
     nr_threads: usize,
-    seed: u64,
 ) -> Result<()> {
     let mut file = File::open(workload_path)?;
     let mut json_data = String::new();
@@ -216,7 +219,7 @@ pub fn run_ycsb<P: AsRef<Path>, T: 'static>(
         serde_json::from_str::<WorkloadSpec>(&json_data).map_err(|_| Error::UnknownSpecFormat)?;
     let record_count = workload_spec.get_record_count();
     let op_count = workload_spec.get_operation_count();
-    let workload = Arc::new(CoreWorkload::new(workload_spec, seed)?);
+    let workload = Arc::new(CoreWorkload::new(workload_spec)?);
 
     let sty = ProgressStyle::default_bar()
         .template("[{elapsed_precise}] {bar:60.cyan/blue} {pos:>7}/{len:7} {per_sec}")
@@ -227,16 +230,22 @@ pub fn run_ycsb<P: AsRef<Path>, T: 'static>(
             (record_count / nr_threads * nr_threads) as u64,
         ));
         pb.set_style(sty.clone());
+        pb.set_draw_delta(record_count as u64 / 1000);
 
-        let threads = (0..nr_threads).map(|_| {
+        let mut threads = Vec::new();
+
+        for _ in 0..nr_threads {
             let db = db.clone();
             let workload = workload.clone();
             let pb = pb.clone();
 
-            thread::spawn(move || load_db(&*db, &workload, record_count / nr_threads, 32, &*pb))
-        });
+            threads.push(thread::spawn(move || {
+                load_db(&*db, &workload, record_count / nr_threads, 32, &*pb)
+            }));
+        }
 
         let loaded: usize = threads
+            .into_iter()
             .map(|t| t.join().unwrap())
             .collect::<Result<Vec<_>>>()?
             .into_iter()
@@ -252,18 +261,24 @@ pub fn run_ycsb<P: AsRef<Path>, T: 'static>(
             (op_count / nr_threads * nr_threads) as u64,
         ));
         pb.set_style(sty);
+        pb.set_draw_delta(op_count as u64 / 1000);
 
         let start = Instant::now();
 
-        let threads = (0..nr_threads).map(|_| {
+        let mut threads = Vec::new();
+
+        for _ in 0..nr_threads {
             let db = db.clone();
             let workload = workload.clone();
             let pb = pb.clone();
 
-            thread::spawn(move || bench_txn(&*db, &workload, op_count / nr_threads, &*pb))
-        });
+            threads.push(thread::spawn(move || {
+                bench_txn(&*db, &workload, op_count / nr_threads, &*pb)
+            }));
+        }
 
         let nr_txns: usize = threads
+            .into_iter()
             .map(|t| t.join().unwrap())
             .collect::<Result<Vec<_>>>()?
             .into_iter()
@@ -281,4 +296,16 @@ pub fn run_ycsb<P: AsRef<Path>, T: 'static>(
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_run() {
+        let db = Arc::new(MockDb::new(true));
+
+        run_ycsb(db, "workloads/workload_a.json", 8).unwrap();
+    }
 }

@@ -1,18 +1,16 @@
 use crate::{Error, Result};
 
-use std::sync::{atomic::AtomicU64, Mutex};
+use std::{marker::PhantomData, sync::atomic::AtomicU64};
 
 use rand::{
     distributions::{Distribution, Uniform},
-    rngs::StdRng,
-    Rng, SeedableRng,
+    Rng,
 };
 
 use zipf::ZipfDistribution;
 
 pub trait Generator<T> {
     fn next(&self) -> T;
-    fn last(&self) -> Option<T>;
 }
 
 pub struct ConstGenerator<T> {
@@ -32,15 +30,11 @@ where
     fn next(&self) -> T {
         self.val.clone()
     }
-
-    fn last(&self) -> Option<T> {
-        Some(self.val.clone())
-    }
 }
 
 pub struct DistributionGenerator<T, D: Distribution<T>> {
-    state: Mutex<(Option<T>, StdRng)>,
     dist: D,
+    value_type: PhantomData<T>,
 }
 
 impl<D, T> Generator<T> for DistributionGenerator<T, D>
@@ -49,41 +43,31 @@ where
     D: Distribution<T>,
 {
     fn next(&self) -> T {
-        let mut guard = self.state.lock().unwrap();
-
-        let val = self.dist.sample(&mut guard.1);
-        guard.0 = Some(val.clone());
+        let val = self.dist.sample(&mut rand::thread_rng());
         val
-    }
-
-    fn last(&self) -> Option<T> {
-        let guard = self.state.lock().unwrap();
-
-        guard.0.clone()
     }
 }
 
-pub fn uniform_gen<T>(min: T, max: T, seed: u64) -> DistributionGenerator<T, Uniform<T>>
+pub fn uniform_gen<T>(min: T, max: T) -> DistributionGenerator<T, Uniform<T>>
 where
     T: rand::distributions::uniform::SampleUniform,
 {
     DistributionGenerator {
-        state: Mutex::new((None, StdRng::seed_from_u64(seed))),
         dist: Uniform::new(min, max),
+        value_type: PhantomData,
     }
 }
 
 pub fn zipfian_gen(
     num_elements: usize,
     exponent: f64,
-    seed: u64,
 ) -> Result<DistributionGenerator<usize, ZipfDistribution>> {
     let dist = ZipfDistribution::new(num_elements, exponent)
         .map_err(|_| Error::InvalidArgument("zipf distribution".to_owned()))?;
 
     Ok(DistributionGenerator {
-        state: Mutex::new((None, StdRng::seed_from_u64(seed))),
         dist,
+        value_type: PhantomData,
     })
 }
 
@@ -122,11 +106,10 @@ where
 
 pub fn discrete_gen<T: Clone + Default>(
     values: Vec<(T, f64)>,
-    seed: u64,
 ) -> DistributionGenerator<T, DiscreteDistribution<T>> {
     DistributionGenerator {
-        state: Mutex::new((None, StdRng::seed_from_u64(seed))),
         dist: DiscreteDistribution::new(values),
+        value_type: PhantomData,
     }
 }
 
@@ -146,16 +129,6 @@ impl Generator<u64> for CounterGenerator {
         self.counter
             .fetch_add(1, std::sync::atomic::Ordering::SeqCst)
     }
-
-    fn last(&self) -> Option<u64> {
-        let val = self.counter.load(std::sync::atomic::Ordering::SeqCst);
-
-        if val == 0 {
-            None
-        } else {
-            Some(val - 1)
-        }
-    }
 }
 
 #[cfg(test)]
@@ -167,17 +140,14 @@ mod tests {
         let gen = ConstGenerator::new(100);
 
         assert_eq!(gen.next(), 100);
-        assert_eq!(gen.last(), Some(100));
     }
 
     #[test]
     fn test_counter_generator() {
         let gen = CounterGenerator::new(0);
-        assert_eq!(gen.last(), None);
 
         for i in 0..10 {
             assert_eq!(gen.next(), i);
         }
-        assert_eq!(gen.last(), Some(9));
     }
 }

@@ -3,11 +3,9 @@ use crate::{
     Error, Result,
 };
 
-use std::num::Wrapping;
-
 use fasthash::xx;
 
-use rand::{distributions::Alphanumeric, Rng};
+use rand::{distributions::Alphanumeric, rngs::SmallRng, Rng, SeedableRng};
 
 use serde::{Deserialize, Serialize};
 
@@ -78,6 +76,11 @@ impl Default for WorkloadSpec {
 impl WorkloadSpec {
     pub fn field_count(mut self, count: usize) -> Self {
         self.field_count = count;
+        self
+    }
+
+    pub fn field_len_const(mut self, len: usize) -> Self {
+        self.field_len_dist = DistributionSpec::Constant(len);
         self
     }
 
@@ -175,14 +178,10 @@ pub struct CoreWorkload {
 }
 
 impl CoreWorkload {
-    pub fn new(spec: WorkloadSpec, seed: u64) -> Result<Self> {
-        let seed = Wrapping(seed);
-
+    pub fn new(spec: WorkloadSpec) -> Result<Self> {
         let field_len_generator: Box<dyn Generator<usize>> = match spec.field_len_dist {
             DistributionSpec::Constant(c) => Box::new(generator::ConstGenerator::new(c)),
-            DistributionSpec::Uniform(min, max) => {
-                Box::new(generator::uniform_gen(min, max, (seed + Wrapping(37)).0))
-            }
+            DistributionSpec::Uniform(min, max) => Box::new(generator::uniform_gen(min, max)),
             _ => {
                 return Err(Error::InvalidArgument(
                     "field length distribution".to_owned(),
@@ -206,21 +205,18 @@ impl CoreWorkload {
         if spec.rmw_proportion > 0.0 {
             ops.push((Operation::ReadModifyWrite, spec.rmw_proportion));
         }
-        let op_generator = generator::discrete_gen(ops, (seed + Wrapping(43)).0);
+        let op_generator = generator::discrete_gen(ops);
 
         let key_generator = generator::CounterGenerator::new(spec.insert_start as u64);
 
         let key_sampler: Box<dyn Generator<usize>> = match spec.request_dist {
-            DistributionSpec::Uniform(_, _) => Box::new(generator::uniform_gen(
-                0,
-                spec.record_count - 1,
-                (seed + Wrapping(47)).0,
-            )),
+            DistributionSpec::Uniform(_, _) => {
+                Box::new(generator::uniform_gen(0, spec.record_count - 1))
+            }
             DistributionSpec::Zipfian(_, s) => Box::new(generator::zipfian_gen(
                 spec.record_count
                     + (spec.operation_count as f64 * spec.insert_proportion) as usize * 2,
                 s,
-                (seed + Wrapping(47)).0,
             )?),
             _ => {
                 return Err(Error::InvalidArgument(
@@ -229,18 +225,13 @@ impl CoreWorkload {
             }
         };
 
-        let field_generator =
-            generator::uniform_gen(0, spec.field_count - 1, (seed + Wrapping(53)).0);
+        let field_generator = generator::uniform_gen(0, spec.field_count - 1);
 
         let scan_len_generator: Box<dyn Generator<usize>> = match spec.scan_len_dist {
-            DistributionSpec::Uniform(min, max) => {
-                Box::new(generator::uniform_gen(min, max, (seed + Wrapping(59)).0))
+            DistributionSpec::Uniform(min, max) => Box::new(generator::uniform_gen(min, max)),
+            DistributionSpec::Zipfian(num_elements, s) => {
+                Box::new(generator::zipfian_gen(num_elements, s)?)
             }
-            DistributionSpec::Zipfian(num_elements, s) => Box::new(generator::zipfian_gen(
-                num_elements,
-                s,
-                (seed + Wrapping(59)).0,
-            )?),
             _ => {
                 return Err(Error::InvalidArgument(
                     "scan length distribution".to_owned(),
@@ -308,8 +299,9 @@ impl CoreWorkload {
     }
 
     pub fn next_field_value(&self) -> String {
-        rand::thread_rng()
-            .sample_iter(&Alphanumeric)
+        let rng = SmallRng::from_rng(rand::thread_rng()).unwrap();
+
+        rng.sample_iter(&Alphanumeric)
             .take(self.field_len_generator.next())
             .collect::<String>()
     }
