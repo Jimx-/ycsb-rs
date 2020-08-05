@@ -15,7 +15,7 @@
   "request_dist": {
     "Zipfian": [
       0,
-      1.01
+      0.99
     ]
   },
   "scan_len_dist": {

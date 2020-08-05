@@ -7,8 +7,6 @@ use rand::{
     Rng,
 };
 
-use zipf::ZipfDistribution;
-
 pub trait Generator<T> {
     fn next(&self) -> T;
 }
@@ -58,19 +56,6 @@ where
     }
 }
 
-pub fn zipfian_gen(
-    num_elements: usize,
-    exponent: f64,
-) -> Result<DistributionGenerator<usize, ZipfDistribution>> {
-    let dist = ZipfDistribution::new(num_elements, exponent)
-        .map_err(|_| Error::InvalidArgument("zipf distribution".to_owned()))?;
-
-    Ok(DistributionGenerator {
-        dist,
-        value_type: PhantomData,
-    })
-}
-
 pub struct DiscreteDistribution<T> {
     values: Vec<(T, f64)>,
     sum: f64,
@@ -111,6 +96,81 @@ pub fn discrete_gen<T: Clone + Default>(
         dist: DiscreteDistribution::new(values),
         value_type: PhantomData,
     }
+}
+
+pub struct ZipfDistribution {
+    base: usize,
+    num_items: usize,
+    theta: f64,
+    zeta_n: f64,
+    alpha: f64,
+    eta: f64,
+}
+
+impl ZipfDistribution {
+    pub fn new(min: usize, max: usize, theta: f64) -> Result<Self> {
+        if max < min {
+            return Err(Error::InvalidArgument("max < min".to_owned()));
+        }
+
+        let num_items = max - min + 1;
+        if num_items < 2 {
+            return Err(Error::InvalidArgument("max - min < 2".to_owned()));
+        }
+
+        if theta == 1.0 {
+            return Err(Error::InvalidArgument("theta == 1.0".to_owned()));
+        }
+
+        let alpha = 1.0 / (1.0 - theta);
+        let zeta_2 = Self::zeta(2, theta);
+        let zeta_n = Self::zeta(num_items, theta);
+
+        let eta = (1.0 - (2.0 / num_items as f64).powf(1.0 - theta)) / (1.0 - zeta_2 / zeta_n);
+
+        Ok(Self {
+            base: min,
+            num_items,
+            theta,
+            zeta_n,
+            alpha,
+            eta,
+        })
+    }
+
+    fn zeta(num: usize, theta: f64) -> f64 {
+        (0..num).map(|i| 1.0 / ((i + 1) as f64).powf(theta)).sum()
+    }
+}
+
+impl Distribution<usize> for ZipfDistribution {
+    fn sample<R: Rng + ?Sized>(&self, rng: &mut R) -> usize {
+        let u: f64 = rng.gen();
+        let uz = u * self.zeta_n;
+
+        if uz < 1.0 {
+            return self.base;
+        }
+
+        if uz < 1.0 + 0.5f64.powf(self.theta) {
+            return self.base + 1;
+        }
+
+        self.base
+            + (self.num_items as f64 * (self.eta * u - self.eta + 1.0).powf(self.alpha)) as usize
+    }
+}
+
+pub fn zipfian_gen(
+    num_elements: usize,
+    theta: f64,
+) -> Result<DistributionGenerator<usize, ZipfDistribution>> {
+    let dist = ZipfDistribution::new(0, num_elements, theta)?;
+
+    Ok(DistributionGenerator {
+        dist,
+        value_type: PhantomData,
+    })
 }
 
 pub struct CounterGenerator {

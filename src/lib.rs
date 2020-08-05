@@ -3,7 +3,6 @@ extern crate indicatif;
 extern crate rand;
 extern crate serde;
 extern crate serde_json;
-extern crate zipf;
 
 mod db;
 mod generator;

@@ -27,7 +27,7 @@ fn bench_next_transaction_key(b: &mut Bencher) {
 #[bench]
 fn bench_next_zipfian_key(b: &mut Bencher) {
     let spec = WorkloadSpec::default()
-        .request_zipfian(1.07)
+        .request_zipfian(0.99)
         .record_count(10000);
     let workload = CoreWorkload::new(spec).unwrap();
 
@@ -57,7 +57,7 @@ fn bench_read_txn(b: &mut Bencher) {
             Ok(_) => {
                 db.commit_transaction(txn).unwrap();
             }
-            err => {
+            _ => {
                 db.abort_transaction(txn).unwrap();
             }
         }
