@@ -1,11 +1,16 @@
 use crate::{Error, Result};
 
-use std::{marker::PhantomData, sync::atomic::AtomicU64};
+use std::{
+    marker::PhantomData,
+    sync::{atomic::AtomicU64, Arc},
+};
 
 use rand::{
     distributions::{Distribution, Uniform},
     Rng,
 };
+
+const ZIPFIAN_CONSTANT: f64 = 0.99;
 
 pub trait Generator<T> {
     fn next(&self) -> T;
@@ -183,11 +188,39 @@ impl CounterGenerator {
             counter: AtomicU64::new(val),
         }
     }
+
+    pub fn last_value(&self) -> u64 {
+        self.counter.load(std::sync::atomic::Ordering::Relaxed)
+    }
 }
 impl Generator<u64> for CounterGenerator {
     fn next(&self) -> u64 {
         self.counter
             .fetch_add(1, std::sync::atomic::Ordering::SeqCst)
+    }
+}
+
+pub struct SkewedLatestGenerator {
+    basis: Arc<CounterGenerator>,
+    zipfian: ZipfDistribution,
+}
+
+impl SkewedLatestGenerator {
+    pub fn new(basis: Arc<CounterGenerator>) -> Self {
+        let max = basis.last_value();
+
+        Self {
+            basis,
+            zipfian: ZipfDistribution::new(0, max as usize, ZIPFIAN_CONSTANT).unwrap(),
+        }
+    }
+}
+
+impl Generator<usize> for SkewedLatestGenerator {
+    fn next(&self) -> usize {
+        let max = self.basis.last_value();
+
+        max as usize - self.zipfian.sample(&mut rand::thread_rng())
     }
 }
 

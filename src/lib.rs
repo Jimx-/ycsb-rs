@@ -57,7 +57,7 @@ impl<'a, T> Client<'a, T> {
 
     pub fn insert_txn(&self, txn: &mut T) -> Result<()> {
         let table = self.workload.next_table();
-        let key = self.workload.next_sequence_key();
+        let key = self.workload.next_insert_sequence();
         let values = self.workload.build_values();
 
         self.db.insert(txn, &table, key, values).map(|_| ())

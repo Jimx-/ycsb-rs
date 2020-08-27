@@ -3,6 +3,8 @@ use crate::{
     Error, Result,
 };
 
+use std::sync::Arc;
+
 use fasthash::xx;
 
 use rand::{distributions::Alphanumeric, rngs::SmallRng, Rng, SeedableRng};
@@ -14,6 +16,7 @@ pub enum DistributionSpec {
     Constant(usize),
     Uniform(usize, usize),
     Zipfian(usize, f64),
+    Latest,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -166,6 +169,7 @@ pub struct CoreWorkload {
     key_sampler: Box<dyn Generator<usize>>,
     field_generator: generator::DistributionGenerator<usize, rand::distributions::Uniform<usize>>,
     scan_len_generator: Box<dyn Generator<usize>>,
+    insert_key_sequence: Arc<generator::CounterGenerator>,
 
     field_count: usize,
 
@@ -209,6 +213,9 @@ impl CoreWorkload {
 
         let key_generator = generator::CounterGenerator::new(spec.insert_start as u64);
 
+        let insert_key_sequence =
+            Arc::new(generator::CounterGenerator::new(spec.record_count as u64));
+
         let key_sampler: Box<dyn Generator<usize>> = match spec.request_dist {
             DistributionSpec::Uniform(_, _) => {
                 Box::new(generator::uniform_gen(0, spec.record_count - 1))
@@ -218,6 +225,9 @@ impl CoreWorkload {
                     + (spec.operation_count as f64 * spec.insert_proportion) as usize * 2,
                 s,
             )?),
+            DistributionSpec::Latest => Box::new(generator::SkewedLatestGenerator::new(
+                insert_key_sequence.clone(),
+            )),
             _ => {
                 return Err(Error::InvalidArgument(
                     "field length distribution".to_owned(),
@@ -246,6 +256,7 @@ impl CoreWorkload {
             key_sampler,
             field_generator,
             scan_len_generator,
+            insert_key_sequence,
 
             field_count: spec.field_count,
 
@@ -292,6 +303,10 @@ impl CoreWorkload {
 
     pub fn next_sequence_key(&self) -> String {
         self.get_key_name(self.key_generator.next() as usize)
+    }
+
+    pub fn next_insert_sequence(&self) -> String {
+        self.get_key_name(self.insert_key_sequence.next() as usize)
     }
 
     pub fn next_transaction_key(&self) -> String {
